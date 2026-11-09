@@ -8,12 +8,12 @@ the user's repos and orgs; macOS arm64 only. No Docker, no Swift/SwiftUI, no App
 
 Read `docs/STATE.md` first. Before stopping, update it (now / next / blockers / last updated) in the
 same commit as the work. Decisions live in `docs/DECISIONS.md`; do not re-open one unless the user asks.
-`REQUIREMENTS.md` is the product brief: ask the user before deviating from it, and verify every GitHub
-API detail against the current docs before relying on it (it lists what is still unverified).
+Verify every GitHub API detail against the current docs before relying on it; `docs/STATE.md` lists what
+is still unverified.
 
 ## Commands
 
-Toolchain pinned to `1.92.0` (`rust-toolchain.toml`); lints follow luneui-rs.
+Toolchain pinned to `1.92.0` (`rust-toolchain.toml`); lints follow [luneui-rs](https://github.com/lune-rs/luneui-rs).
 
 - Build: `cargo build --workspace`
 - Test (all): `cargo test --workspace`
@@ -42,19 +42,18 @@ against GitHub is a manual step by the user.
 - Each trait has a fake and a contract suite in `crates/macrunnerbar-testkit`; every implementation passes it.
 - `unsafe` only in `macrunnerbar-macos`, each block with `// SAFETY:`; every other crate forbids it.
 - Add a new adapter by adding a crate and one registration line in the composition root; core does not change.
-- LuneUI is pinned by git `rev` (`32d19048684745b54ab542e5dc886bea43326e08`), as Luneterm does. If it lacks
+- LuneUI is pinned by git `rev` (`32d19048684745b54ab542e5dc886bea43326e08`). If it lacks
   something (menu-style list, count badge on the tray icon), tell the user; do not patch it or work around
   it silently.
 
 ## Hard rules
 
-1. Never read, print, log, echo or commit the user's PAT (`GITHUB_MASTER_CLASSIC_PAT` in `~/.zshrc`) or any
+1. Never read, print, log, echo or commit the user's PAT (`GITHUB_MASTER_CLASSIC_PAT` in their shell profile) or any
    token. In the app it lives only in the macOS Keychain, held as `Secret<T>` (prints `[redacted]`). The Keychain does not hide it from jobs (they run as the user and can call `security`, D31); do not claim it does. Checks:
    `.claude/settings.json` denies, `scripts/check-secrets.sh`, sentinel tests (`macrunnerbar-macos` log and Keychain argv, `macrunnerbar-github` errors, the app's Preferences form).
 2. Per-job JIT, ephemeral runners only: nothing idle, a fresh template copy per job, deleted afterwards along
    with any stale registration. Quit or crash leaves no orphan process or registration; cleanup runs on next launch.
-3. Runner names use the prefix `ghm-`; cleanup touches only `ghm-*` registrations (`gha-*` and `ghw-*` belong
-   to the Linux/Windows autoscaler).
+3. Runner names use the prefix `ghm-`; cleanup touches only `ghm-*` registrations (other runner setups use other prefixes).
 4. Serve a job only if its labels are a subset of `self-hosted,macos,arm64` and include `macos`.
 5. Public repos are skipped unless listed in `PUBLIC_ALLOW`: a fork PR would run untrusted code with the user's privileges.
 6. Polling uses ETag conditional requests; back off per repo on API errors; survive sleep/wake and network loss.
@@ -66,12 +65,9 @@ against GitHub is a manual step by the user.
 
 - Worktree per task, always, orchestrated or not (Override: the global file makes this the orchestration default only).
 - Commit per change.
-- Before the repo is ever published, run the steps in `~/.claude/github/README.md`.
 
 ## Read on demand
 
 - `docs/STATE.md` - current work and next steps
 - `docs/DECISIONS.md` - decisions and what was rejected
-- `REQUIREMENTS.md` - product brief, context, out of scope, what to verify before relying on it
-- `~/Projects/luneui-rs/docs/consuming.md` and `docs/components/platform/tray-icon.md` - how to depend on LuneUI; tray and popover
-- `~/Projects/infra/runners/README.md` - the Linux/Windows autoscaler whose model this mirrors
+- LuneUI: <https://github.com/lune-rs/luneui-rs> (`docs/consuming.md`, `docs/components/platform/tray-icon.md`) - how to depend on it; tray and popover

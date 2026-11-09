@@ -14,10 +14,8 @@ v1 is merged on `main` (workspace, GitHub and macOS adapters, engine, app, gate,
    assumptions: JIT runner labels versus `runs-on`, and `run.sh --jitconfig` (an environment-variable form exists,
    `ProcessRunnerHost::with_jit_via_env`).
 2. Run `cargo test -p macrunnerbar-macos -- --ignored` once by hand (real login Keychain, scratch item).
-3. Publish (separate, approved step): first the public-readiness clean-up (home paths, private repo/infra
-   names, stale REQUIREMENTS.md header; see the refresh findings), then `~/.claude/github/README.md`
-   (collaborators-only PRs, push owner-only) and `scripts/check-secrets.sh`; check the font and crate
-   licences in `THIRD_PARTY_NOTICES.md`.
+3. Publish (separate, approved step): the public-readiness clean-up is done; run `scripts/check-secrets.sh`,
+   restrict PRs to collaborators and push to the owner only on the new repo.
 
 ## Blockers / open questions
 
