@@ -22,7 +22,7 @@ Toolchain pinned to `1.92.0` (`rust-toolchain.toml`); lints follow [luneui-rs](h
 - Boundaries: `scripts/check-boundaries.sh` (from `cargo metadata` and `rustc -F unsafe_code`)
 - Secret scan: `scripts/check-secrets.sh` (needs `gitleaks`)
 - Check (per commit; must be green): `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
-- Gate (once per tip before merge; must be green): `scripts/gate.sh` = Check + `scripts/check-boundaries.sh` + `scripts/check-secrets.sh`; CI (`.github/workflows/ci.yml`) runs it on `macos-latest`, then `scripts/bundle.sh`
+- Gate (once per tip before merge; must be green): `scripts/gate.sh` = Check + `scripts/check-boundaries.sh` + `scripts/check-secrets.sh`; CI (`.github/workflows/ci.yml`) runs it on the project's own self-hosted runner (`[self-hosted, macos, arm64]`; fork PRs are skipped), then `scripts/bundle.sh`
 - Run / package (`.app` bundle with `LSUIElement`, ad-hoc signed): `scripts/bundle.sh` (`--check` also verifies the plist and signature and runs `macrunnerbar --smoke`, which needs a GUI session); look without a display: `macrunnerbar --dump <dir>` writes the popover, Preferences and icons as PNG
 - Manual, real login Keychain (scratch item, not in the gate): `cargo test -p macrunnerbar-macos -- --ignored`
 
