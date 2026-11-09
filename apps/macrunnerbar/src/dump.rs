@@ -38,7 +38,7 @@ fn sample_view(jobs: usize) -> PopoverView {
         paused: false,
         jobs: (0..jobs)
             .map(|i| JobRow {
-                repo: ["ijat/MacRunnerbar", "Luneterm/luneterm"][i % 2].into(),
+                repo: ["ijat/MacRunnerbar", "example-org/example-app"][i % 2].into(),
                 detail: ["CI / build (macos-arm64)", "Release / package"][i % 2].into(),
                 elapsed: ["3m 12s", "41s"][i % 2].into(),
                 url: Some("https://github.com/ijat/MacRunnerbar/actions/runs/1".into()),

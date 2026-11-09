@@ -42,8 +42,8 @@ against real GitHub (see [First run](#first-run-and-live-check)).
   Metadata read; not tried here) over a classic one. Revoke and replace it if a job you did not trust ran.
 - Runner processes get a minimal environment (`HOME`, `USER`, `PATH`, locale), not the app's: a token
   in your shell environment does not reach a job.
-- Only runners named `ghm-*` are ever created, listed or deleted; the Linux and Windows autoscalers'
-  `gha-*` and `ghw-*` registrations are never touched.
+- Only runners named `ghm-*` are ever created, listed or deleted; other runners'
+  registrations are never touched.
 
 ## Build and run
 
