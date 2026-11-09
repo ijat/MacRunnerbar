@@ -21,6 +21,8 @@ struct State {
     /// Failure for `list_repos`.
     list_failure: Option<ApiError>,
     release: Option<RunnerRelease>,
+    /// Failure for `latest_runner_release`.
+    release_failure: Option<ApiError>,
     calls: Vec<String>,
 }
 
@@ -98,6 +100,12 @@ impl FakeGitHub {
         s.repo_failures.clear();
         s.jit_failures.clear();
         s.list_failure = None;
+        s.release_failure = None;
+    }
+
+    /// Make `latest_runner_release` fail until [`clear_failures`](Self::clear_failures).
+    pub fn fail_release(&self, err: ApiError) {
+        self.lock().release_failure = Some(err);
     }
 
     /// Register a runner directly (a stale or foreign registration); returns its id.
@@ -227,6 +235,9 @@ impl GitHubApi for FakeGitHub {
     fn latest_runner_release(&self) -> Result<RunnerRelease, ApiError> {
         let mut s = self.lock();
         s.calls.push("latest_runner_release".into());
+        if let Some(e) = &s.release_failure {
+            return Err(e.clone());
+        }
         s.release.clone().ok_or(ApiError::NotFound)
     }
 

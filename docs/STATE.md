@@ -1,10 +1,10 @@
 # State
 
-Last updated: 2026-11-09 (v1 step 1)
+Last updated: 2026-11-09 (v1 step 4)
 
 ## Now
 
-v1 orchestration in progress on branch `orch/v1`. Step 1 done: workspace, `macrunnerbar-core` (types, traits, policy), `macrunnerbar-testkit` (fakes, contract suites). Steps 2-6 pending (GitHub adapter, macOS adapter, engine, app, gate/CI).
+v1 orchestration in progress on branch `orch/v1`. Done: workspace + core/testkit (step 1), GitHub adapter (2), macOS adapter (3), engine in `macrunnerbar-core::engine` (4). Pending: app with tray/popover/preferences/bundle (5), gate/boundaries/CI/docs (6).
 
 ## Next
 

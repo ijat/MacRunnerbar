@@ -9,6 +9,12 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+# Engine tests run against the fakes. testkit depends on core, so this is a dev-dependency cycle, which
+# cargo allows; it is used only from `tests/` (integration tests link the one normal core crate).
+[dev-dependencies]
+macrunnerbar-testkit = { path = "../macrunnerbar-testkit" }
 
 [lints]
 workspace = true

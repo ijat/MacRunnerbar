@@ -15,6 +15,8 @@ struct State {
     fail_spawn: Option<OsError>,
     /// Names of runners spawned, in order.
     spawned: Vec<String>,
+    /// Names of runners whose process was stopped by `kill` or `delete_dir`, in order.
+    killed: Vec<String>,
 }
 
 /// Fake [`RunnerHost`]. A spawned process runs until [`finish`](Self::finish) or `kill`.
@@ -62,6 +64,11 @@ impl FakeRunnerHost {
     /// Names passed to `spawn`, in order.
     pub fn spawned(&self) -> Vec<String> {
         self.lock().spawned.clone()
+    }
+
+    /// Names of runners stopped by `kill` or `delete_dir` while still running, in order.
+    pub fn killed(&self) -> Vec<String> {
+        self.lock().killed.clone()
     }
 
     /// Runner names whose process is still running.
@@ -116,20 +123,28 @@ impl RunnerHost for FakeRunnerHost {
     }
 
     fn kill(&self, handle: RunnerHandle) -> Result<(), OsError> {
-        if let Some((_, st)) = self.lock().procs.get_mut(&handle.0)
+        let mut s = self.lock();
+        if let Some((name, st)) = s.procs.get_mut(&handle.0)
             && *st == ProcessState::Running
         {
             *st = ProcessState::Exited(None);
+            let name = name.clone();
+            s.killed.push(name);
         }
         Ok(())
     }
 
     fn delete_dir(&self, name: &str) -> Result<(), OsError> {
         let mut s = self.lock();
+        let mut stopped = false;
         for (n, st) in s.procs.values_mut() {
             if n == name && *st == ProcessState::Running {
                 *st = ProcessState::Exited(None);
+                stopped = true;
             }
+        }
+        if stopped {
+            s.killed.push(name.into());
         }
         s.dirs.remove(name);
         Ok(())
