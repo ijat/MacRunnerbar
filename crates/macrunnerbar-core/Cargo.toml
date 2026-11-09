@@ -1,0 +1,20 @@
+[package]
+name = "macrunnerbar-core"
+description = "MacRunnerbar domain types, traits and pure policy (no I/O, no UI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+# Engine tests run against the fakes. testkit depends on core, so this is a dev-dependency cycle, which
+# cargo allows; it is used only from `tests/` (integration tests link the one normal core crate).
+[dev-dependencies]
+macrunnerbar-testkit = { path = "../macrunnerbar-testkit" }
+
+[lints]
+workspace = true
