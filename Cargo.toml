@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"] # step 5 adds "apps/*"
+members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,8 @@ unwrap_used = "warn"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+# LuneUI, pinned by git rev (CLAUDE.md, D7). Only `apps/macrunnerbar` depends on it.
+lune-ui = { git = "https://github.com/lune-rs/luneui-rs", rev = "32d19048684745b54ab542e5dc886bea43326e08", features = ["accesskit"] }
 
 [profile.release]
 lto = "fat"

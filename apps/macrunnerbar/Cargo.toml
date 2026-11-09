@@ -1,0 +1,28 @@
+[package]
+name = "macrunnerbar-app"
+description = "MacRunnerbar: the menu-bar app (composition root, tray, popover, preferences)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "macrunnerbar"
+path = "src/main.rs"
+
+[dependencies]
+macrunnerbar-core = { path = "../../crates/macrunnerbar-core" }
+macrunnerbar-github = { path = "../../crates/macrunnerbar-github" }
+macrunnerbar-macos = { path = "../../crates/macrunnerbar-macos" }
+lune-ui.workspace = true
+pollster = "0.4"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+wgpu = "30"
+winit = "0.30"
+
+[dev-dependencies]
+macrunnerbar-testkit = { path = "../../crates/macrunnerbar-testkit" }
+
+[lints]
+workspace = true
