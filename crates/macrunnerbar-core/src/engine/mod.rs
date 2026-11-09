@@ -150,6 +150,22 @@ const OUTCOME_RETRY: Duration = Duration::from_secs(10);
 /// A job that is claimed but not found yet is looked for this many times.
 const OUTCOME_MISSING_TRIES: u32 = 3;
 
+/// Why a template update failed.
+#[derive(Debug)]
+enum TemplateError {
+    Api(ApiError),
+    Other(String),
+}
+
+impl std::fmt::Display for TemplateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Api(e) => e.fmt(f),
+            Self::Other(m) => f.write_str(m),
+        }
+    }
+}
+
 /// The state machine. See the module docs.
 pub struct Engine {
     deps: Deps,
@@ -160,7 +176,13 @@ pub struct Engine {
     cleanups: Vec<Cleanup>,
     outcomes: Vec<Outcome>,
     /// Eligible repos, refreshed every `repo_refresh`.
+    /// Every repo the token can see, as last listed.
+    repo_list: Vec<Repo>,
+    /// The names of those that are eligible under the current settings (recomputed at each scan).
     repos: Vec<String>,
+    /// The last global failure is one the user can fix (token, network), so a user-initiated rescan
+    /// does not wait for its backoff. A rate limit is not.
+    global_fixable: bool,
     next_repo_refresh: Timestamp,
     next_scan: Timestamp,
     next_template_check: Timestamp,
@@ -213,7 +235,9 @@ impl Engine {
             tracked: Vec::new(),
             cleanups: Vec::new(),
             outcomes: Vec::new(),
+            repo_list: Vec::new(),
             repos: Vec::new(),
+            global_fixable: false,
             next_repo_refresh: now,
             next_scan: now,
             next_template_check: now,
@@ -267,9 +291,22 @@ impl Engine {
     }
 
     /// Scan on the next tick instead of waiting for the poll interval (also re-reads the settings).
+    /// Called after a user action (a new token, saved settings): a standing failure the user can have
+    /// fixed (a rejected token, no network) is retried at once instead of after its backoff, and so is
+    /// a failed template download. A rate limit is not bypassed.
     pub fn request_scan(&mut self) {
-        self.next_scan = self.deps.clock.now();
-        self.next_repo_refresh = self.next_scan;
+        let now = self.deps.clock.now();
+        self.next_scan = now;
+        self.next_repo_refresh = now;
+        if self.global_fixable {
+            self.global_until = None;
+            self.backoff.record_success(GLOBAL_KEY);
+            self.errors.remove(GLOBAL_KEY);
+            self.global_fixable = false;
+        }
+        if self.global_until.is_none() {
+            self.template_retry_at = now;
+        }
     }
 
     /// One step. Never panics on adapter errors; they become backoff and `last_error`.
@@ -287,7 +324,7 @@ impl Engine {
             self.next_scan = now;
             self.next_repo_refresh = now;
         }
-        let net_ok = self.global_until.is_none_or(|t| now >= t);
+        let mut net_ok = self.global_until.is_none_or(|t| now >= t);
         self.run_cleanups(net_ok);
         if net_ok {
             self.retry_outcomes(now);
@@ -295,6 +332,8 @@ impl Engine {
         self.reap_exited(now);
         if net_ok {
             self.maintain_template(now);
+            // A token or network failure found there is account-wide: do not scan into it this tick.
+            net_ok = self.global_until.is_none_or(|t| now >= t);
         }
         if now >= self.next_scan && net_ok {
             self.scan(now);
@@ -619,7 +658,18 @@ impl Engine {
                 self.next_template_check = now.plus(self.config.template_check_every);
                 self.errors.remove("template");
             }
-            Err(msg) => {
+            Err(TemplateError::Api(e))
+                if installed.is_none()
+                    && (e.is_global() || matches!(e, ApiError::RateLimited { .. })) =>
+            {
+                // Token, network or rate limit with no template to fall back on: the account-wide backoff
+                // decides when to try again, not the hour that suits a broken download. (A failed refresh
+                // of a template that works is only logged, below.)
+                tracing::warn!(error = %e, "runner template update failed");
+                self.on_error(GLOBAL_KEY, &e, now, "updating the runner template");
+            }
+            Err(err) => {
+                let msg = err.to_string();
                 tracing::warn!(error = %msg, "runner template update failed");
                 self.template_retry_at = now.plus(self.config.template_retry);
                 // A failed refresh of a working template is only logged; having none is an error.
@@ -631,12 +681,12 @@ impl Engine {
         }
     }
 
-    fn update_template(&self, installed: Option<&str>) -> Result<(), String> {
+    fn update_template(&self, installed: Option<&str>) -> Result<(), TemplateError> {
         let release = self
             .deps
             .github
             .latest_runner_release()
-            .map_err(|e| e.to_string())?;
+            .map_err(TemplateError::Api)?;
         if installed == Some(release.version.as_str()) {
             return Ok(());
         }
@@ -646,7 +696,7 @@ impl Engine {
             .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
             .collect();
         std::fs::create_dir_all(&self.config.scratch_dir)
-            .map_err(|e| format!("scratch dir: {:?}", e.kind()))?;
+            .map_err(|e| TemplateError::Other(format!("scratch dir: {:?}", e.kind())))?;
         let archive = self
             .config
             .scratch_dir
@@ -655,12 +705,12 @@ impl Engine {
             .deps
             .github
             .download_release(&release, &archive)
-            .map_err(|e| e.to_string())
+            .map_err(TemplateError::Api)
             .and_then(|()| {
                 self.deps
                     .host
                     .install_template(&archive, &release.version)
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| TemplateError::Other(e.to_string()))
             });
         let _ = std::fs::remove_file(&archive);
         result?;
@@ -690,8 +740,8 @@ impl Engine {
     }
 
     fn refresh_repos(&mut self, now: Timestamp) -> Result<(), ApiError> {
-        let repos: Vec<Repo> = self.deps.github.list_repos()?;
-        self.repos = eligible_repos(&repos, &self.settings);
+        self.repo_list = self.deps.github.list_repos()?;
+        self.repos = eligible_repos(&self.repo_list, &self.settings);
         self.next_repo_refresh = now.plus(self.config.repo_refresh);
         tracing::info!(count = self.repos.len(), "watching repos");
         Ok(())
@@ -699,6 +749,8 @@ impl Engine {
 
     fn scan(&mut self, now: Timestamp) {
         self.reload_settings();
+        // Settings may have changed since the list was fetched: eligibility is judged now.
+        self.repos = eligible_repos(&self.repo_list, &self.settings);
         self.scans += 1;
         let serve = !self.paused;
         self.next_scan = now.plus(self.poll_interval());
@@ -730,6 +782,7 @@ impl Engine {
         }
 
         let template_ok = self.template_ready();
+        let eligible: HashSet<String> = self.repos.iter().map(|r| lc(r)).collect();
         let mut demands: Vec<RepoDemand> = Vec::new();
         let mut queued_by_repo: HashMap<String, Vec<QueuedJob>> = HashMap::new();
         if !global_failed {
@@ -737,11 +790,14 @@ impl Engine {
                 if self.backoff.is_backed_off(&repo, now) {
                     continue;
                 }
-                match self.scan_repo(&repo, serve, now) {
+                // A repo that is no longer eligible (excluded, dropped from the public allow list, out of
+                // the include list, now public) is visited only for its runners' state, never for work.
+                let serve_repo = serve && eligible.contains(&lc(&repo));
+                match self.scan_repo(&repo, serve_repo, now) {
                     Ok(queued) => {
                         self.backoff.record_success(&repo);
                         self.errors.remove(&repo);
-                        if serve && template_ok && !queued.is_empty() {
+                        if serve_repo && template_ok && !queued.is_empty() {
                             demands.push(RepoDemand {
                                 repo: repo.clone(),
                                 queued: queued.len(),
@@ -765,6 +821,7 @@ impl Engine {
             self.backoff.record_success(GLOBAL_KEY);
             self.errors.remove(GLOBAL_KEY);
             self.global_until = None;
+            self.global_fixable = false;
         }
 
         if serve && !global_failed {
@@ -984,6 +1041,7 @@ impl Engine {
                 let own = self.backoff.record_failure(GLOBAL_KEY, now);
                 let wait = retry_after.unwrap_or(own).max(Duration::from_secs(1));
                 self.global_until = Some(now.plus(wait));
+                self.global_fixable = false;
                 self.errors.insert(
                     GLOBAL_KEY.into(),
                     format!("GitHub rate limit; retrying in {}s", wait.as_secs()),
@@ -992,6 +1050,7 @@ impl Engine {
             ApiError::Unauthorized | ApiError::Network(_) => {
                 let wait = self.backoff.record_failure(GLOBAL_KEY, now);
                 self.global_until = Some(now.plus(wait));
+                self.global_fixable = true;
                 self.errors.insert(
                     GLOBAL_KEY.into(),
                     format!("{e}; retrying in {}s", wait.as_secs()),

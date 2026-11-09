@@ -30,10 +30,14 @@ mod engine {
     }
 
     fn unique_scratch() -> PathBuf {
+        // A counter as well as the clock: tests run in parallel threads and the clock's resolution on
+        // macOS is coarser than the time two rigs take to build, so a time alone can repeat.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        std::env::temp_dir().join(format!("mrb-engine-{}-{nanos}", std::process::id()))
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("mrb-engine-{}-{nanos}-{n}", std::process::id()))
     }
 
     fn base_settings() -> Settings {
@@ -1005,6 +1009,216 @@ mod engine {
         r.tick();
         assert!(r.notifier.sent().is_empty());
         assert_eq!(r.calls("get_job") + r.calls("find_job_by_runner"), before);
+    }
+
+    // ---- fix round 1 -----------------------------------------------------------------------------
+
+    #[test]
+    fn a_new_token_restarts_a_stalled_first_run_at_once() {
+        for failure in [ApiError::Unauthorized, ApiError::Network("down".into())] {
+            // First launch: no template, no usable token.
+            let mut r = rig_with(base_settings(), FakeRunnerHost::new(), &[("o/r", true)]);
+            r.queue("o/r", &[1]);
+            r.gh.fail_release(failure.clone());
+            r.gh.fail_list_repos(failure.clone());
+            r.gh.fail_repo("o/r", failure.clone());
+            r.tick();
+            assert!(r.names().is_empty());
+            assert!(r.engine.snapshot().last_error.is_some());
+            let calls = r.calls("latest_runner_release");
+
+            // The user pastes a working token (Preferences calls `scan_now`): no clock movement at all.
+            r.gh.clear_failures();
+            r.engine.request_scan();
+            r.tick();
+            assert_eq!(
+                r.calls("latest_runner_release"),
+                calls + 1,
+                "template retried at once ({failure:?})"
+            );
+            assert_eq!(
+                r.names().len(),
+                1,
+                "a runner started in that one tick ({failure:?})"
+            );
+            assert!(r.engine.snapshot().last_error.is_none(), "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_bypassed_by_a_user_rescan() {
+        let mut r = rig_with(base_settings(), FakeRunnerHost::new(), &[("o/r", true)]);
+        r.queue("o/r", &[1]);
+        r.gh.fail_release(ApiError::RateLimited {
+            retry_after: Some(Duration::from_secs(300)),
+        });
+        r.tick();
+        let (a, b) = (r.calls("latest_runner_release"), r.calls("list_repos"));
+        r.gh.clear_failures();
+        for _ in 0..3 {
+            r.engine.request_scan();
+            r.tick_after(10);
+        }
+        assert_eq!(
+            r.calls("latest_runner_release"),
+            a,
+            "no request during the limit"
+        );
+        assert_eq!(r.calls("list_repos"), b);
+        r.tick_after(100);
+        r.tick_after(100);
+        r.tick_after(100);
+        assert_eq!(r.names().len(), 1, "served once the limit has passed");
+    }
+
+    #[test]
+    fn a_repo_that_stops_being_eligible_gets_no_more_runners_while_one_is_still_running() {
+        let mut s = base_settings();
+        s.public_allow = vec!["o/pub".into()];
+        s.global_max = 4;
+        s.per_owner_max = 4;
+        let mut r = rig_with(
+            s.clone(),
+            FakeRunnerHost::with_template("2.999.0"),
+            &[("o/pub", false), ("o/priv", true)],
+        );
+        r.queue("o/pub", &[1]);
+        r.tick();
+        assert_eq!(r.names().len(), 1);
+        let first = r.names()[0].clone();
+        r.claim(&first, "o/pub", 1);
+
+        // Dropped from the public allow list while its runner is busy: a second job is not served.
+        s.public_allow.clear();
+        r.store.save(&s).expect("save");
+        r.queue("o/pub", &[2]);
+        r.engine.request_scan();
+        r.tick();
+        assert_eq!(
+            r.names().len(),
+            1,
+            "no new runner for a repo that is no longer allowed"
+        );
+        assert_eq!(
+            r.engine.snapshot().running.len(),
+            1,
+            "the running job is left alone"
+        );
+
+        // The same for an exclusion, and for leaving the include list.
+        s.public_allow = vec!["o/pub".into()];
+        r.store.save(&s).expect("save");
+        r.engine.request_scan();
+        r.tick_after(31);
+        assert_eq!(r.names().len(), 2, "served again once allowed");
+        let second = r.names()[1].clone();
+        r.claim(&second, "o/pub", 2);
+        r.queue("o/pub", &[3]);
+        s.exclude = vec!["O/Pub".into()];
+        r.store.save(&s).expect("save");
+        r.engine.request_scan();
+        r.tick_after(31);
+        assert_eq!(r.names().len(), 2, "excluded: no new runner");
+        s.exclude.clear();
+        s.include = vec!["o/priv".into()];
+        r.store.save(&s).expect("save");
+        r.engine.request_scan();
+        r.tick_after(31);
+        assert_eq!(
+            r.names().len(),
+            2,
+            "outside the include list: no new runner"
+        );
+        // Its busy runners still finish and are reaped.
+        r.host.finish(&first, Some(0));
+        r.tick_after(31);
+        assert_eq!(r.engine.snapshot().running.len(), 1);
+    }
+
+    /// A GitHub that panics on `queued_jobs` while told to.
+    struct Panicky {
+        inner: Arc<FakeGitHub>,
+        panic: std::sync::atomic::AtomicBool,
+    }
+
+    macro_rules! delegate {
+        ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
+            $(fn $name(&self, $($arg: $ty),*) -> $ret { self.inner.$name($($arg),*) })*
+        };
+    }
+
+    impl macrunnerbar_core::GitHubApi for Panicky {
+        delegate! {
+            list_repos() -> Result<Vec<Repo>, ApiError>;
+            list_runners(repo: &str) -> Result<Vec<macrunnerbar_core::RunnerInfo>, ApiError>;
+            delete_runner(repo: &str, id: u64) -> Result<(), ApiError>;
+            latest_runner_release() -> Result<RunnerRelease, ApiError>;
+            find_job_by_runner(repo: &str, runner: &str) -> Result<Option<JobInfo>, ApiError>;
+            get_job(repo: &str, id: u64) -> Result<JobInfo, ApiError>;
+        }
+
+        fn queued_jobs(&self, repo: &str) -> Result<Vec<QueuedJob>, ApiError> {
+            assert!(
+                !self.panic.load(Ordering::SeqCst),
+                "injected panic in a tick"
+            );
+            self.inner.queued_jobs(repo)
+        }
+
+        fn generate_jit(
+            &self,
+            repo: &str,
+            name: &str,
+            labels: &[String],
+        ) -> Result<macrunnerbar_core::JitConfig, ApiError> {
+            self.inner.generate_jit(repo, name, labels)
+        }
+
+        fn download_release(
+            &self,
+            rel: &RunnerRelease,
+            dest: &std::path::Path,
+        ) -> Result<(), ApiError> {
+            self.inner.download_release(rel, dest)
+        }
+    }
+
+    #[test]
+    fn a_panic_in_a_tick_does_not_stop_the_engine_or_orphan_its_runners() {
+        // The thread contains the panic (this only holds while the release profile unwinds), keeps
+        // ticking, and its shutdown still kills every runner.
+        let mut r = rig();
+        r.queue("o/r", &[1]);
+        let panicky = Arc::new(Panicky {
+            inner: r.gh.clone(),
+            panic: false.into(),
+        });
+        let engine = Engine::new(
+            Deps {
+                github: panicky.clone(),
+                host: r.host.clone(),
+                clock: r.clock.clone(),
+                notifier: r.notifier.clone(),
+                settings: r.store.clone(),
+            },
+            EngineConfig::new(&r.scratch),
+        );
+        let handle = EngineHandle::spawn(engine, None);
+        handle.tick_now();
+        assert_eq!(r.host.running().len(), 1);
+        panicky.panic.store(true, Ordering::SeqCst);
+        r.clock.advance(Duration::from_secs(31));
+        handle.tick_now(); // panics inside the engine thread
+        panicky.panic.store(false, Ordering::SeqCst);
+        r.clock.advance(Duration::from_secs(31));
+        handle.tick_now(); // the thread is still alive and answers
+        assert_eq!(handle.snapshot().running.len(), 1);
+        handle.shutdown();
+        assert!(
+            r.host.running().is_empty(),
+            "shutdown still killed the runner"
+        );
+        assert!(r.host.list_leftover().expect("leftover").is_empty());
     }
 
     // ---- the threaded handle ------------------------------------------------------------------
