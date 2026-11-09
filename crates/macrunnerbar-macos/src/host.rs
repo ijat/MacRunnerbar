@@ -42,8 +42,9 @@ struct Tracked {
 
 /// Runs each runner from a fresh copy of the template, in its own process group, as the current user.
 ///
-/// Layout under [`Paths::root`]: `template/` (+ `template.version`), `jobs/<name>/` (a per-job copy,
-/// deleted afterwards) and `run/<name>.pid` (pid and start time, to find orphans after a crash).
+/// Layout under [`Paths::root`]: `template/` (+ `template.version`) and `run/<name>.pid`; per-job
+/// copies (deleted afterwards) are `<name>/` under [`Paths::jobs_dir`], a space-free path outside it (D34).
+/// The pid records (pid and start time, to find orphans after a crash).
 pub struct ProcessRunnerHost {
     paths: Paths,
     kill_grace: Duration,
@@ -455,17 +456,20 @@ impl RunnerHost for ProcessRunnerHost {
                 procs.remove(&h);
             }
         }
-        let dir = self.job_dir(name);
-        let mut removed = force_remove_dir_all(&dir);
-        for _ in 0..3 {
-            if removed.is_ok() {
-                break;
+        // The current location, and the pre-D34 one under Application Support (a leftover of an older
+        // version; absent otherwise).
+        for dir in [self.job_dir(name), self.paths.legacy_jobs_dir().join(name)] {
+            let mut removed = force_remove_dir_all(&dir);
+            for _ in 0..3 {
+                if removed.is_ok() {
+                    break;
+                }
+                // A dying process may still be writing into the directory.
+                std::thread::sleep(Duration::from_millis(100));
+                removed = force_remove_dir_all(&dir);
             }
-            // A dying process may still be writing into the directory.
-            std::thread::sleep(Duration::from_millis(100));
-            removed = force_remove_dir_all(&dir);
+            removed.map_err(|e| io_err("cannot remove the job directory", &e))?;
         }
-        removed.map_err(|e| io_err("cannot remove the job directory", &e))?;
         match fs::remove_file(self.pid_file(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(io_err("cannot remove pid file", &e))
@@ -476,7 +480,11 @@ impl RunnerHost for ProcessRunnerHost {
 
     fn list_leftover(&self) -> Result<Vec<String>, OsError> {
         let mut names: Vec<String> = Vec::new();
-        for (dir, strip) in [(self.paths.jobs_dir(), ""), (self.paths.run_dir(), ".pid")] {
+        for (dir, strip) in [
+            (self.paths.jobs_dir(), ""),
+            (self.paths.legacy_jobs_dir(), ""),
+            (self.paths.run_dir(), ".pid"),
+        ] {
             let rd = match fs::read_dir(&dir) {
                 Ok(rd) => rd,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
