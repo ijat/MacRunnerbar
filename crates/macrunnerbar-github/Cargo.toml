@@ -1,0 +1,21 @@
+[package]
+name = "macrunnerbar-github"
+description = "GitHub REST adapter for MacRunnerbar: ETag polling, JIT runners, runner release download"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+macrunnerbar-core = { path = "../macrunnerbar-core" }
+serde_json = "1"
+sha2 = "0.10"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[dev-dependencies]
+macrunnerbar-testkit = { path = "../macrunnerbar-testkit" }
+
+[lints]
+workspace = true
