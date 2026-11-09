@@ -28,9 +28,18 @@ against real GitHub (see [First run](#first-run-and-live-check)).
   Anything a workflow does, it does as your account. Only run workflows you trust.
 - **Public repos are skipped** unless you list them under "Public repos to serve": a pull request from a
   fork would run untrusted code on your Mac.
-- The token (a classic PAT with `repo` scope; the repos must be ones you administer) lives only in the
-  macOS Keychain and in memory as a redacting `Secret`. It never appears in a process argument, a log
+- The token (a classic PAT with `repo` scope; the repos must be ones you administer) is stored in the
+  macOS Keychain and held in memory as a redacting `Secret`. It never appears in a process argument, a log
   line, an error message or the settings file.
+- **The Keychain does not protect the token from your jobs.** The item is created through the `security`
+  command-line tool, which macOS trusts to read it without a prompt, and jobs run as you with `/usr/bin` on
+  their `PATH`: a workflow step (or an action a step pulls in) can run
+  `security find-generic-password -s my.ijat.macrunnerbar -a github-pat -w` and get the token while your
+  login keychain is unlocked. Treat the token like anything else a job can reach. Give it only the access
+  you need: serve only repos you trust (an owner or an org where untrusted people can get a workflow to
+  run is a way to your token), and, if you serve a single owner, prefer a fine-grained token limited to
+  those repos (repository permissions Administration read and write for runner registration, Actions read,
+  Metadata read; not tried here) over a classic one. Revoke and replace it if a job you did not trust ran.
 - Runner processes get a minimal environment (`HOME`, `USER`, `PATH`, locale), not the app's: a token
   in your shell environment does not reach a job.
 - Only runners named `ghm-*` are ever created, listed or deleted; the Linux and Windows autoscalers'

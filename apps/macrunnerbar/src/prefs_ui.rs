@@ -147,7 +147,7 @@ pub(crate) fn draw(
     }
     y += 38.0;
     let stored = if form.token_stored {
-        "A token is stored in the macOS Keychain."
+        "In the Keychain; jobs run as you and can read it."
     } else {
         "No token yet: nothing runs until one is saved."
     };
