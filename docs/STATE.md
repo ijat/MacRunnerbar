@@ -1,22 +1,24 @@
 # State
 
-Last updated: 2026-11-09 (v1 step 4)
+Last updated: 2026-11-09 (v1 step 6)
 
 ## Now
 
-v1 orchestration in progress on branch `orch/v1`. Done: workspace + core/testkit (step 1), GitHub adapter (2), macOS adapter (3), engine in `macrunnerbar-core::engine` (4), job-conclusion notifications (step 5, Revision 1), the app and `scripts/bundle.sh` (5). Pending: gate/boundaries/CI/docs (6) and the user's live check (token, a real queued job, the tray, Preferences, launch at login).
+v1 is implemented on branch `orch/v1` (workspace, GitHub and macOS adapters, engine, app, gate, CI) and waits
+for review and the merge. Last updated: step 6 (gate, boundaries, CI, README).
 
 ## Next
 
-1. Ask the user the open questions: which owners/repos to serve first; logged-in user or a dedicated local user.
-2. First plan: workspace skeleton (`Cargo.toml` with workspace lints, `crates/macrunnerbar-{core,github,macos,testkit}`,
-   `apps/macrunnerbar`), traits and fakes, `scripts/check-boundaries.sh`, `scripts/gate.sh`; verify the GitHub JIT
-   details (labels set at creation, `run.sh --jitconfig`) and pick the launch-at-login mechanism.
-3. Add CI once the gate exists: `.github/workflows/ci.yml` running `scripts/gate.sh`, on a macOS arm64 runner
-   (the app crate depends on macOS-only code); pin `actions/checkout` and `Swatinem/rust-cache` to their latest majors then.
-4. Before publishing the repo: run `~/.claude/github/README.md` (collaborators-only PRs, push owner-only) and re-scan history with `scripts/check-secrets.sh`.
+1. The user's live check (README, "First run and live check"): token in Preferences, a real queued
+   `[self-hosted, macos, arm64]` job, tray states, Quit and crash cleanup, launch at login. It also settles two
+   assumptions: JIT runner labels versus `runs-on`, and `run.sh --jitconfig` (an environment-variable form exists,
+   `ProcessRunnerHost::with_jit_via_env`).
+2. Run `cargo test -p macrunnerbar-macos -- --ignored` once by hand (real login Keychain, scratch item).
+3. Before publishing the repo (a separate, approved step): `~/.claude/github/README.md` (collaborators-only PRs,
+   push owner-only) and `scripts/check-secrets.sh`; check the font and crate licences listed in `THIRD_PARTY_NOTICES.md`.
 
 ## Blockers / open questions
 
-- Owners/repos to serve first; run jobs as logged-in or dedicated user (REQUIREMENTS.md open questions).
-- Whether LuneUI can draw a count badge into the tray icon and render a menu-style list (to be checked in the first plan).
+- None blocking the merge. Open: whether LuneUI should grow a list-of-rows widget and glyph-free checkbox (the app
+  draws its own list and uses a toggle); two Macs using the `ghm-` prefix on one repo would sweep each other's
+  registrations (a single Mac is assumed).

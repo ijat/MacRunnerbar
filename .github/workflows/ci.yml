@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    # GitHub-hosted Apple silicon runner (the app's crates are macOS-only); never the user's own runner.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the secret scan reads the whole history
+      - name: Toolchain (pinned in rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - name: Install gitleaks
+        run: brew install gitleaks
+      - name: Gate (fmt, clippy, tests, boundaries, secrets)
+        run: scripts/gate.sh
+      - name: Bundle the app (ad-hoc signed)
+        run: scripts/bundle.sh
