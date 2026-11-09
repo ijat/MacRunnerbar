@@ -3,6 +3,7 @@
 //! No I/O, no UI toolkit, no HTTP client. Adapters (`macrunnerbar-github`, `macrunnerbar-macos`)
 //! implement the traits; the app crate wires them together.
 
+pub mod engine;
 pub mod error;
 pub mod policy;
 pub mod secret;
