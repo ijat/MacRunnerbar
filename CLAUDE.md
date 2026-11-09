@@ -24,6 +24,7 @@ Toolchain pinned to `1.92.0` (`rust-toolchain.toml`); lints follow luneui-rs.
 - Check (per commit; must be green): `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 - Gate (once per tip before merge; must be green): `scripts/gate.sh` = Check + `scripts/check-boundaries.sh` + `scripts/check-secrets.sh`; CI (`.github/workflows/ci.yml`) runs it on `macos-latest`, then `scripts/bundle.sh`
 - Run / package (`.app` bundle with `LSUIElement`, ad-hoc signed): `scripts/bundle.sh` (`--check` also verifies the plist and signature and runs `macrunnerbar --smoke`, which needs a GUI session); look without a display: `macrunnerbar --dump <dir>` writes the popover, Preferences and icons as PNG
+- Manual, real login Keychain (scratch item, not in the gate): `cargo test -p macrunnerbar-macos -- --ignored`
 
 Tests never call GitHub and never need a token: the API sits behind a trait with a fake. A live check
 against GitHub is a manual step by the user.
