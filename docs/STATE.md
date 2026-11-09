@@ -1,10 +1,10 @@
 # State
 
-Last updated: 2026-11-09 (init commit)
+Last updated: 2026-11-09 (v1 step 1)
 
 ## Now
 
-Nothing in progress. Repo initialized with docs and config only; no code.
+v1 orchestration in progress on branch `orch/v1`. Step 1 done: workspace, `macrunnerbar-core` (types, traits, policy), `macrunnerbar-testkit` (fakes, contract suites). Steps 2-6 pending (GitHub adapter, macOS adapter, engine, app, gate/CI).
 
 ## Next
 
