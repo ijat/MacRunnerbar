@@ -466,3 +466,83 @@ fn extraction_refuses_path_traversal_symlink_write_through_and_hard_links() {
         "nothing was installed"
     );
 }
+
+#[test]
+fn a_leftover_in_the_pre_d34_jobs_location_is_listed_and_removed() {
+    let scratch = Scratch::new("legacy");
+    let paths = Paths::under(scratch.path());
+    paths.ensure().expect("ensure");
+    let old = paths.legacy_jobs_dir().join("ghm-o-r-legacy");
+    std::fs::create_dir_all(old.join("_work")).expect("old job dir");
+    std::fs::write(old.join("_work").join("f"), "x").expect("file");
+    assert_ne!(paths.legacy_jobs_dir(), paths.jobs_dir());
+    let host = ProcessRunnerHost::new(&paths).with_kill_grace(Duration::from_millis(300));
+    assert_eq!(
+        host.list_leftover().expect("leftover"),
+        vec!["ghm-o-r-legacy"]
+    );
+    host.delete_dir("ghm-o-r-legacy").expect("cleanup");
+    assert!(!old.exists());
+    assert!(host.list_leftover().expect("leftover").is_empty());
+}
+
+/// The actions runner runs `run:` steps as `/bin/bash -e <path>` with the path unquoted. Here a shell
+/// does the unquoted expansion, which splits on whitespace exactly like the failure seen live.
+fn run_unquoted(script: &std::path::Path) -> std::process::Output {
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("/bin/bash -e {}", script.display()))
+        .output()
+        .expect("run sh")
+}
+
+#[test]
+fn a_step_script_in_a_job_dir_runs_through_unquoted_bash_e() {
+    let scratch = Scratch::new("unquoted");
+    let paths = Paths::under(scratch.path());
+    paths.ensure().expect("ensure");
+    let temp = paths.jobs_dir().join("ghm-o-r-step01/_work/_temp");
+    std::fs::create_dir_all(&temp).expect("temp");
+    let script = temp.join("step.sh");
+    std::fs::write(&script, "echo step-ran\n").expect("script");
+    let out = run_unquoted(&script);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "step-ran");
+
+    // Control: the same invocation through a path with a space fails, so the check above is not vacuous.
+    let spaced = scratch.path().join("Application Support/jobs/x");
+    std::fs::create_dir_all(&spaced).expect("spaced");
+    std::fs::write(spaced.join("step.sh"), "echo step-ran\n").expect("script");
+    let out = run_unquoted(&spaced.join("step.sh"));
+    assert!(!out.status.success(), "a spaced path unexpectedly worked");
+}
+
+#[test]
+fn the_real_jobs_dir_for_a_normal_home_runs_a_script_unquoted() {
+    // Same invariant for the production layout, below a scratch "home" (no whitespace).
+    let scratch = Scratch::new("realhome");
+    let paths = Paths::for_home(scratch.path());
+    paths.ensure().expect("ensure");
+    let temp = paths.jobs_dir().join("ghm-o-r-step02/_work/_temp");
+    std::fs::create_dir_all(&temp).expect("temp");
+    std::fs::write(temp.join("s.sh"), "echo ok\n").expect("script");
+    let out = run_unquoted(&temp.join("s.sh"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn spawn_is_refused_when_the_jobs_dir_would_contain_whitespace() {
+    let scratch = Scratch::new("spacehome");
+    let home = scratch.path().join("Jane Doe");
+    let paths = Paths::for_home(&home);
+    let host = ProcessRunnerHost::new(&paths);
+    let err = host
+        .spawn("ghm-o-r-nospace", &jit("X"))
+        .expect_err("must refuse");
+    assert!(err.to_string().contains("whitespace"), "{err}");
+    assert!(!home.exists());
+}
