@@ -112,8 +112,8 @@ Layout (details in `CLAUDE.md`, decisions in `docs/DECISIONS.md`):
 | `macrunnerbar-testkit` | fakes and one contract suite per trait |
 | `macrunnerbar-app` (`apps/macrunnerbar`) | the composition root, tray, popover and Preferences on LuneUI |
 
-Tests never touch GitHub or the Keychain. CI (`.github/workflows/ci.yml`) runs the gate on a
-GitHub-hosted macOS runner.
+Tests never touch GitHub or the Keychain. CI (`.github/workflows/ci.yml`) runs the gate on the project's own
+self-hosted macOS runner (fork PRs are skipped, so they never run on it).
 
 ## License
 
