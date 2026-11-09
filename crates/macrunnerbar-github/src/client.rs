@@ -6,7 +6,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use macrunnerbar_core::{
-    ApiError, GitHubApi, JitConfig, QueuedJob, Repo, RunnerInfo, RunnerRelease, Secret,
+    ApiError, GitHubApi, JitConfig, JobConclusion, JobInfo, JobStatus, QueuedJob, Repo, RunnerInfo,
+    RunnerRelease, Secret,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -270,6 +271,90 @@ impl GitHubApi for GitHubClient {
                 Err(e)
             }
         }
+    }
+
+    /// Looks through the repo's in-progress runs, then its ten most recent completed ones (latest
+    /// attempt of each), for a job whose `runner_name` is this runner's. A runner takes one job, so
+    /// the first match is the one.
+    fn find_job_by_runner(
+        &self,
+        repo: &str,
+        runner_name: &str,
+    ) -> Result<Option<JobInfo>, ApiError> {
+        check_repo(repo)?;
+        check_runner_name(runner_name)?;
+        for (status, per_page) in [("in_progress", 50), ("completed", 10)] {
+            let runs = self.http.get(
+                &format!("/repos/{repo}/actions/runs?status={status}&per_page={per_page}"),
+                true,
+            )?;
+            for run in Self::array(&runs.body, "workflow_runs") {
+                let run_id = u64_field(run, "id")?;
+                let run_url = run
+                    .get("html_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let jobs = match self.http.get(
+                    &format!("/repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"),
+                    true,
+                ) {
+                    Ok(p) => p,
+                    Err(ApiError::NotFound) => continue,
+                    Err(e) => return Err(e),
+                };
+                for job in Self::array(&jobs.body, "jobs") {
+                    if job.get("runner_name").and_then(Value::as_str) == Some(runner_name) {
+                        return Self::parse_job(repo, run_url, job).map(Some);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// `GET /repos/{repo}/actions/jobs/{id}` (not cached: it is asked once per finished job).
+    fn get_job(&self, repo: &str, job_id: u64) -> Result<JobInfo, ApiError> {
+        check_repo(repo)?;
+        let page = self
+            .http
+            .get(&format!("/repos/{repo}/actions/jobs/{job_id}"), false)?;
+        Self::parse_job(repo, "", &page.body)
+    }
+}
+
+impl GitHubClient {
+    /// A job object (from the jobs list or `GET .../jobs/{id}`) as a [`JobInfo`].
+    fn parse_job(repo: &str, run_url_fallback: &str, v: &Value) -> Result<JobInfo, ApiError> {
+        let status = match v.get("status").and_then(Value::as_str) {
+            Some("completed") => JobStatus::Completed,
+            Some("in_progress") => JobStatus::InProgress,
+            _ => JobStatus::Queued,
+        };
+        let conclusion = v
+            .get("conclusion")
+            .and_then(Value::as_str)
+            .map(JobConclusion::from_api);
+        Ok(JobInfo {
+            repo: repo.to_string(),
+            run_id: u64_field(v, "run_id")?,
+            job_id: u64_field(v, "id")?,
+            workflow: v
+                .get("workflow_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            name: str_field(v, "name")?.to_string(),
+            html_url: v
+                .get("html_url")
+                .and_then(Value::as_str)
+                .unwrap_or(run_url_fallback)
+                .to_string(),
+            status,
+            conclusion: if status == JobStatus::Completed {
+                conclusion
+            } else {
+                None
+            },
+        })
     }
 }
 

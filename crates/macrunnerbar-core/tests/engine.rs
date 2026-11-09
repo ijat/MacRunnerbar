@@ -9,8 +9,8 @@ mod engine {
 
     use macrunnerbar_core::engine::{Deps, Engine, EngineConfig, EngineHandle, Observer};
     use macrunnerbar_core::{
-        ApiError, IconState, NotifyMode, OsError, QueuedJob, Repo, RunnerHost, RunnerRelease,
-        Settings, SettingsStore, StatusSnapshot, WaitReason,
+        ApiError, IconState, JobConclusion, JobInfo, JobStatus, NotifyMode, OsError, QueuedJob,
+        Repo, RunnerHost, RunnerRelease, Settings, SettingsStore, StatusSnapshot, WaitReason,
     };
     use macrunnerbar_testkit::{
         FakeClock, FakeGitHub, FakeRunnerHost, MemSettingsStore, RecordingNotifier,
@@ -825,6 +825,186 @@ mod engine {
                 .iter()
                 .all(|x| x.name.starts_with("ghm-"))
         );
+    }
+
+    // ---- job conclusions ------------------------------------------------------------------------
+
+    fn job_info(id: u64, status: JobStatus, conclusion: Option<JobConclusion>) -> JobInfo {
+        JobInfo {
+            repo: "o/r".into(),
+            run_id: 100 + id,
+            job_id: id,
+            workflow: Some("CI".into()),
+            name: "build".into(),
+            html_url: format!("https://github.com/o/r/actions/runs/{}/job/{id}", 100 + id),
+            status,
+            conclusion,
+        }
+    }
+
+    /// A runner that has taken job 1; the engine has seen it busy and learned the job.
+    fn busy_runner(r: &mut Rig) -> String {
+        r.queue("o/r", &[1]);
+        r.tick();
+        let a = r.names()[0].clone();
+        r.claim(&a, "o/r", 1);
+        r.gh.add_job(job_info(1, JobStatus::InProgress, None), &a);
+        r.tick_after(30);
+        a
+    }
+
+    #[test]
+    fn a_red_job_notifies_even_though_the_runner_exits_cleanly() {
+        let mut r = rig();
+        let a = busy_runner(&mut r);
+        let snap = r.engine.snapshot();
+        assert_eq!(
+            snap.running[0].job_name.as_deref(),
+            Some("build"),
+            "exact job once found"
+        );
+        assert!(
+            snap.running[0]
+                .html_url
+                .as_deref()
+                .is_some_and(|u| u.ends_with("/job/1"))
+        );
+
+        r.gh.set_job_state(1, JobStatus::Completed, Some(JobConclusion::Failure));
+        r.host.finish(&a, Some(0));
+        r.tick();
+        let sent = r.notifier.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].title, "Job failed");
+        assert!(
+            sent[0].body.contains("o/r") && sent[0].body.contains("CI / build"),
+            "{}",
+            sent[0].body
+        );
+        assert_eq!(
+            r.calls("get_job"),
+            1,
+            "one extra request for the finished job"
+        );
+    }
+
+    #[test]
+    fn green_cancelled_and_skipped_jobs_do_not_notify_under_failures_only_but_timeouts_do() {
+        for (conclusion, expected) in [
+            (JobConclusion::Success, 0),
+            (JobConclusion::Cancelled, 0),
+            (JobConclusion::Skipped, 0),
+            (JobConclusion::TimedOut, 1),
+            (JobConclusion::Failure, 1),
+        ] {
+            let mut r = rig();
+            let a = busy_runner(&mut r);
+            r.gh.set_job_state(1, JobStatus::Completed, Some(conclusion));
+            r.host.finish(&a, Some(0));
+            r.tick();
+            assert_eq!(r.notifier.sent().len(), expected, "{conclusion:?}");
+        }
+    }
+
+    #[test]
+    fn all_mode_reports_a_green_job_with_its_conclusion() {
+        let s = Settings {
+            notify: NotifyMode::All,
+            ..base_settings()
+        };
+        let mut r = rig_with(
+            s,
+            FakeRunnerHost::with_template("2.999.0"),
+            &[("o/r", true)],
+        );
+        let a = busy_runner(&mut r);
+        r.gh.set_job_state(1, JobStatus::Completed, Some(JobConclusion::Success));
+        r.host.finish(&a, Some(0));
+        r.tick();
+        let sent = r.notifier.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].title, "Job finished");
+        assert!(sent[0].body.contains("succeeded"), "{}", sent[0].body);
+    }
+
+    #[test]
+    fn a_conclusion_that_is_not_there_yet_is_asked_again_and_reported_once() {
+        let mut r = rig();
+        let a = busy_runner(&mut r);
+        r.host.finish(&a, Some(0));
+        r.tick(); // the job is still "in progress" on GitHub's side
+        assert!(r.notifier.sent().is_empty());
+        r.tick_after(5);
+        assert_eq!(r.calls("get_job"), 1, "not asked again within 10 s");
+        r.gh.set_job_state(1, JobStatus::Completed, Some(JobConclusion::Failure));
+        r.tick_after(6);
+        assert_eq!(r.notifier.sent().len(), 1);
+        r.tick_after(30);
+        r.tick_after(30);
+        assert_eq!(r.notifier.sent().len(), 1, "never twice");
+    }
+
+    #[test]
+    fn a_failed_lookup_is_retried_and_after_five_minutes_a_crash_is_reported_without_it() {
+        let mut r = rig();
+        let a = busy_runner(&mut r);
+        r.gh.fail_repo("o/r", ApiError::Http { status: 500 });
+        r.host.finish(&a, Some(0));
+        r.tick();
+        r.gh.clear_failures();
+        r.gh.set_job_state(1, JobStatus::Completed, Some(JobConclusion::Failure));
+        r.tick_after(11);
+        assert_eq!(r.notifier.sent().len(), 1, "retried and reported");
+
+        // The job never completes on GitHub's side: the runner's own failure is reported after 5 min.
+        let mut r = rig();
+        let a = busy_runner(&mut r);
+        r.host.finish(&a, Some(1));
+        r.tick();
+        let mut waited = 0;
+        while waited < 330 {
+            r.tick_after(10);
+            waited += 10;
+        }
+        let sent = r.notifier.sent();
+        assert_eq!(sent.len(), 1, "one notification, however long it took");
+        assert_eq!(sent[0].title, "Runner failed");
+    }
+
+    #[test]
+    fn a_job_that_ended_before_the_engine_saw_it_busy_is_still_found_by_runner_name() {
+        let mut r = rig();
+        r.queue("o/r", &[1]);
+        r.tick();
+        let a = r.names()[0].clone();
+        r.gh.add_job(
+            job_info(1, JobStatus::Completed, Some(JobConclusion::Failure)),
+            &a,
+        );
+        r.host.finish(&a, Some(0));
+        r.tick();
+        assert_eq!(r.notifier.sent().len(), 1);
+        assert_eq!(r.notifier.sent()[0].title, "Job failed");
+    }
+
+    #[test]
+    fn notifications_off_never_asks_for_a_job() {
+        let s = Settings {
+            notify: NotifyMode::Off,
+            ..base_settings()
+        };
+        let mut r = rig_with(
+            s,
+            FakeRunnerHost::with_template("2.999.0"),
+            &[("o/r", true)],
+        );
+        let a = busy_runner(&mut r);
+        let before = r.calls("get_job") + r.calls("find_job_by_runner");
+        r.gh.set_job_state(1, JobStatus::Completed, Some(JobConclusion::Failure));
+        r.host.finish(&a, Some(1));
+        r.tick();
+        assert!(r.notifier.sent().is_empty());
+        assert_eq!(r.calls("get_job") + r.calls("find_job_by_runner"), before);
     }
 
     // ---- the threaded handle ------------------------------------------------------------------

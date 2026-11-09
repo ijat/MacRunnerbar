@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use macrunnerbar_core::{
-    ApiError, Clock, GitHubApi, JitConfig, Keychain, LoginItem, Notification, Notifier,
-    ProcessState, RunnerHost, RunnerRelease, Secret, Settings, SettingsStore,
+    ApiError, Clock, GitHubApi, JitConfig, JobConclusion, JobStatus, Keychain, LoginItem,
+    Notification, Notifier, ProcessState, RunnerHost, RunnerRelease, Secret, Settings,
+    SettingsStore,
 };
 
 /// What a [`GitHubApi`] under test was seeded with.
@@ -93,6 +94,46 @@ pub fn github_contract(api: &dyn GitHubApi, fx: &GitHubFixture) {
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
         "sha256 is 64 lowercase hex chars"
+    );
+}
+
+/// What a [`GitHubApi`] under test was seeded with for the job lookups.
+#[derive(Debug, Clone)]
+pub struct JobFixture {
+    /// A repo with a completed job.
+    pub repo: String,
+    /// Name (`ghm-...`) of the runner that executed that job.
+    pub runner_name: String,
+    /// Id of that job.
+    pub job_id: u64,
+    /// Its conclusion, as seeded.
+    pub conclusion: JobConclusion,
+}
+
+/// Contract for `GitHubApi::find_job_by_runner` and `get_job`.
+pub fn github_job_contract(api: &dyn GitHubApi, fx: &JobFixture) {
+    let found = api
+        .find_job_by_runner(&fx.repo, &fx.runner_name)
+        .expect("find_job_by_runner")
+        .expect("the runner's job is found");
+    assert_eq!(found.job_id, fx.job_id);
+    assert_eq!(found.status, JobStatus::Completed);
+    assert_eq!(found.conclusion, Some(fx.conclusion));
+    assert!(!found.name.is_empty());
+    assert!(found.repo.eq_ignore_ascii_case(&fx.repo));
+    assert!(
+        api.find_job_by_runner(&fx.repo, "ghm-nobody-000000")
+            .expect("unknown runner")
+            .is_none(),
+        "a runner with no job is Ok(None)"
+    );
+    let got = api.get_job(&fx.repo, fx.job_id).expect("get_job");
+    assert_eq!(got.job_id, fx.job_id);
+    assert_eq!(got.conclusion, Some(fx.conclusion));
+    assert_eq!(got.status, JobStatus::Completed);
+    assert!(
+        matches!(api.get_job(&fx.repo, 1), Err(ApiError::NotFound)),
+        "unknown job id is NotFound"
     );
 }
 

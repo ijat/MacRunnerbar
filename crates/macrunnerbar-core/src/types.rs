@@ -286,6 +286,95 @@ pub enum ProcessState {
     Exited(Option<i32>),
 }
 
+/// Where a workflow job is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobStatus {
+    /// Waiting for a runner.
+    Queued,
+    /// A runner is executing it.
+    InProgress,
+    /// Done; the conclusion says how it went.
+    Completed,
+}
+
+/// How a completed job ended, as GitHub reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobConclusion {
+    /// Green.
+    Success,
+    /// A step failed.
+    Failure,
+    /// Cancelled by a person or by a failing sibling.
+    Cancelled,
+    /// Hit its timeout.
+    TimedOut,
+    /// Skipped.
+    Skipped,
+    /// Neutral.
+    Neutral,
+    /// Waiting for approval.
+    ActionRequired,
+    /// A value this app does not know.
+    Other,
+}
+
+impl JobConclusion {
+    /// From GitHub's `conclusion` string.
+    pub fn from_api(s: &str) -> Self {
+        match s {
+            "success" => Self::Success,
+            "failure" => Self::Failure,
+            "cancelled" => Self::Cancelled,
+            "timed_out" => Self::TimedOut,
+            "skipped" => Self::Skipped,
+            "neutral" => Self::Neutral,
+            "action_required" => Self::ActionRequired,
+            _ => Self::Other,
+        }
+    }
+
+    /// A red job: failed or timed out. A cancellation is not counted (GitHub gives no way to tell a
+    /// person's cancel from an error; a runner that dies mid-job is caught by its exit status instead).
+    pub fn is_red(self) -> bool {
+        matches!(self, Self::Failure | Self::TimedOut)
+    }
+
+    /// A few words for a notification.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Success => "succeeded",
+            Self::Failure => "failed",
+            Self::Cancelled => "was cancelled",
+            Self::TimedOut => "timed out",
+            Self::Skipped => "was skipped",
+            Self::Neutral => "finished neutral",
+            Self::ActionRequired => "needs action",
+            Self::Other => "finished",
+        }
+    }
+}
+
+/// A workflow job as GitHub reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobInfo {
+    /// `owner/name`.
+    pub repo: String,
+    /// Workflow run id.
+    pub run_id: u64,
+    /// Job id.
+    pub job_id: u64,
+    /// Workflow name, when known.
+    pub workflow: Option<String>,
+    /// Job name.
+    pub name: String,
+    /// Browser URL of the job.
+    pub html_url: String,
+    /// Where it is.
+    pub status: JobStatus,
+    /// How it ended, once completed.
+    pub conclusion: Option<JobConclusion>,
+}
+
 /// A user-facing notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {

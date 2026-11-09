@@ -581,3 +581,98 @@ fn debug_of_client_shows_no_token() {
     let s = format!("{c:?}");
     assert!(s.contains("api.github.com") && !s.contains(TOKEN));
 }
+
+#[test]
+fn find_job_by_runner_searches_in_progress_then_recent_completed_runs() {
+    let stub = Stub::start(|req, _| {
+        let p = req.path().to_string();
+        if p.ends_with("/actions/runs") {
+            if req.query().contains("status=in_progress") {
+                Resp::json(200, &json!({"workflow_runs":[{"id":1,"html_url":"u1"}]}))
+            } else {
+                Resp::json(200, &json!({"workflow_runs":[{"id":2,"html_url":"u2"}]}))
+            }
+        } else if p.ends_with("/runs/1/jobs") {
+            Resp::json(
+                200,
+                &json!({"jobs":[{"id":10,"run_id":1,"name":"a","status":"in_progress","conclusion":null,"runner_name":"ghm-o-r-other11"}]}),
+            )
+        } else if p.ends_with("/runs/2/jobs") {
+            Resp::json(
+                200,
+                &json!({"jobs":[{"id":20,"run_id":2,"name":"b","status":"completed","conclusion":"timed_out","runner_name":"ghm-o-r-aaaaaa"}]}),
+            )
+        } else {
+            Resp::json(404, &json!({}))
+        }
+    });
+    let c = client(&stub);
+    let job = c
+        .find_job_by_runner("o/r", "ghm-o-r-aaaaaa")
+        .expect("ok")
+        .expect("found");
+    assert_eq!((job.job_id, job.run_id), (20, 2));
+    assert_eq!(job.status, macrunnerbar_core::JobStatus::Completed);
+    assert_eq!(
+        job.conclusion,
+        Some(macrunnerbar_core::JobConclusion::TimedOut)
+    );
+    assert_eq!(job.html_url, "u2", "falls back to the run's URL");
+    let running = c
+        .find_job_by_runner("o/r", "ghm-o-r-other11")
+        .expect("ok")
+        .expect("found");
+    assert_eq!(running.status, macrunnerbar_core::JobStatus::InProgress);
+    assert_eq!(running.conclusion, None);
+    assert!(
+        c.find_job_by_runner("o/r", "ghm-o-r-nobody1")
+            .expect("ok")
+            .is_none()
+    );
+    // Foreign names and bad repos never reach the network.
+    let before = stub.requests().len();
+    assert!(matches!(
+        c.find_job_by_runner("o/r", "gha-linux-1"),
+        Err(ApiError::Invalid(_))
+    ));
+    assert!(matches!(
+        c.find_job_by_runner("o/r?x", "ghm-o-r-aaaaaa"),
+        Err(ApiError::Invalid(_))
+    ));
+    assert_eq!(stub.requests().len(), before);
+}
+
+#[test]
+fn get_job_maps_status_and_conclusion_and_errors() {
+    let stub = Stub::start(|req, _| match req.path() {
+        "/repos/o/r/actions/jobs/5" => Resp::json(
+            200,
+            &json!({"id":5,"run_id":1,"name":"t","status":"in_progress","conclusion":null,"workflow_name":"CI","html_url":"https://x/5"}),
+        ),
+        "/repos/o/r/actions/jobs/6" => Resp::json(
+            200,
+            &json!({"id":6,"run_id":1,"name":"t","status":"completed","conclusion":"cancelled"}),
+        ),
+        "/repos/o/r/actions/jobs/7" => Resp::json(500, &json!({"message":"boom"})),
+        _ => Resp::json(404, &json!({"message":"Not Found"})),
+    });
+    let c = client(&stub);
+    let j = c.get_job("o/r", 5).expect("job");
+    assert_eq!(j.status, macrunnerbar_core::JobStatus::InProgress);
+    assert_eq!((j.conclusion, j.workflow.as_deref()), (None, Some("CI")));
+    let j = c.get_job("o/r", 6).expect("job");
+    assert_eq!(
+        j.conclusion,
+        Some(macrunnerbar_core::JobConclusion::Cancelled)
+    );
+    assert!(
+        !j.conclusion
+            .is_some_and(macrunnerbar_core::JobConclusion::is_red)
+    );
+    assert_eq!(
+        c.get_job("o/r", 7).expect_err("500"),
+        ApiError::Http { status: 500 }
+    );
+    assert_eq!(c.get_job("o/r", 8).expect_err("404"), ApiError::NotFound);
+    assert!(matches!(c.get_job("../x", 1), Err(ApiError::Invalid(_))));
+}

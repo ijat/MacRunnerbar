@@ -26,8 +26,8 @@ use crate::policy::{
 };
 use crate::traits::{Clock, GitHubApi, Notifier, RunnerHost, SettingsStore};
 use crate::types::{
-    Notification, NotifyMode, ProcessState, QueuedJob, RunnerHandle, RunnerInfo, RunningJob,
-    Settings, StatusSnapshot, Timestamp, WaitingJobs,
+    JobConclusion, JobInfo, JobStatus, Notification, NotifyMode, ProcessState, QueuedJob,
+    RunnerHandle, RunnerInfo, RunningJob, Settings, StatusSnapshot, Timestamp, WaitingJobs,
 };
 use crate::{ApiError, Repo};
 
@@ -114,6 +114,8 @@ struct Tracked {
     /// GitHub reported the runner busy at least once.
     claimed: bool,
     hint: Option<JobHint>,
+    /// The job GitHub says this runner took, once found.
+    job: Option<JobInfo>,
 }
 
 /// A finished or abandoned runner whose directory and registration still have to go.
@@ -126,6 +128,28 @@ struct Cleanup {
     reg_done: bool,
 }
 
+/// A finished runner whose job outcome is still being looked up for a notification.
+#[derive(Debug)]
+struct Outcome {
+    repo: String,
+    name: String,
+    code: Option<i32>,
+    crashed: bool,
+    /// GitHub reported the runner busy, so a job exists to be found.
+    claimed: bool,
+    job: Option<JobInfo>,
+    first_try: Timestamp,
+    next_try: Timestamp,
+    attempts: u32,
+}
+
+/// How long to keep asking GitHub for a finished job's conclusion before notifying without it.
+const OUTCOME_DEADLINE: Duration = Duration::from_secs(300);
+/// Delay between those requests.
+const OUTCOME_RETRY: Duration = Duration::from_secs(10);
+/// A job that is claimed but not found yet is looked for this many times.
+const OUTCOME_MISSING_TRIES: u32 = 3;
+
 /// The state machine. See the module docs.
 pub struct Engine {
     deps: Deps,
@@ -134,6 +158,7 @@ pub struct Engine {
     paused: bool,
     tracked: Vec<Tracked>,
     cleanups: Vec<Cleanup>,
+    outcomes: Vec<Outcome>,
     /// Eligible repos, refreshed every `repo_refresh`.
     repos: Vec<String>,
     next_repo_refresh: Timestamp,
@@ -187,6 +212,7 @@ impl Engine {
             paused: false,
             tracked: Vec::new(),
             cleanups: Vec::new(),
+            outcomes: Vec::new(),
             repos: Vec::new(),
             next_repo_refresh: now,
             next_scan: now,
@@ -263,6 +289,9 @@ impl Engine {
         }
         let net_ok = self.global_until.is_none_or(|t| now >= t);
         self.run_cleanups(net_ok);
+        if net_ok {
+            self.retry_outcomes(now);
+        }
         self.reap_exited(now);
         if net_ok {
             self.maintain_template(now);
@@ -301,13 +330,27 @@ impl Engine {
             .tracked
             .iter()
             .map(|t| {
+                // The job GitHub reported is exact; the hint (the job the runner was started for) is
+                // only a guess and is shown once the runner is busy.
                 let hint = t.hint.as_ref().filter(|_| t.claimed);
+                let (workflow, job_name, html_url) = match &t.job {
+                    Some(j) => (
+                        j.workflow.clone(),
+                        Some(j.name.clone()),
+                        Some(j.html_url.clone()),
+                    ),
+                    None => (
+                        hint.and_then(|h| h.workflow.clone()),
+                        hint.map(|h| h.name.clone()),
+                        hint.map(|h| h.html_url.clone()),
+                    ),
+                };
                 RunningJob {
                     runner_name: t.name.clone(),
                     repo: t.repo.clone(),
-                    workflow: hint.and_then(|h| h.workflow.clone()),
-                    job_name: hint.map(|h| h.name.clone()),
-                    html_url: hint.map(|h| h.html_url.clone()),
+                    workflow,
+                    job_name,
+                    html_url,
                     started: t.started,
                 }
             })
@@ -409,7 +452,24 @@ impl Engine {
             self.crash_streak.remove(&key);
             self.errors.remove(&t.repo);
         }
-        self.notify_exit(&t, code);
+        let outcome = Outcome {
+            repo: t.repo.clone(),
+            name: t.name.clone(),
+            code,
+            crashed,
+            claimed: t.claimed,
+            job: t.job.clone(),
+            first_try: now,
+            next_try: now,
+            attempts: 0,
+        };
+        if self.global_until.is_none_or(|u| now >= u) {
+            if let Some(pending) = self.try_outcome(outcome, now) {
+                self.outcomes.push(pending);
+            }
+        } else {
+            self.outcomes.push(outcome);
+        }
         self.cleanups.push(Cleanup {
             name: t.name,
             repo: t.repo,
@@ -423,28 +483,112 @@ impl Engine {
         }
     }
 
-    fn notify_exit(&self, t: &Tracked, code: Option<i32>) {
-        let crashed = code != Some(0);
+    /// Ask GitHub how the runner's job ended and notify per the mode. Returns the outcome back if it
+    /// has to be asked again later.
+    fn try_outcome(&self, mut o: Outcome, now: Timestamp) -> Option<Outcome> {
+        if self.settings.notify == NotifyMode::Off {
+            return None;
+        }
+        let fetched = match &o.job {
+            Some(j) => self.deps.github.get_job(&o.repo, j.job_id).map(Some),
+            None => self.deps.github.find_job_by_runner(&o.repo, &o.name),
+        };
+        let retry = match fetched {
+            Ok(Some(info)) if info.status == JobStatus::Completed && info.conclusion.is_some() => {
+                self.send_outcome(&o, Some(&info));
+                return None;
+            }
+            Ok(Some(info)) => {
+                o.job = Some(info); // not completed yet
+                true
+            }
+            Ok(None) | Err(ApiError::NotFound) => {
+                if o.job.is_some() {
+                    false
+                } else if o.claimed && o.attempts < OUTCOME_MISSING_TRIES {
+                    true
+                } else {
+                    self.send_outcome(&o, None);
+                    return None;
+                }
+            }
+            Err(e) => {
+                tracing::info!(repo = %o.repo, runner = %o.name, error = %e, "job outcome not available yet");
+                true
+            }
+        };
+        o.attempts += 1;
+        if !retry || now.since(o.first_try) > OUTCOME_DEADLINE {
+            let job = o.job.clone();
+            self.send_outcome(&o, job.as_ref());
+            return None;
+        }
+        o.next_try = now.plus(OUTCOME_RETRY);
+        Some(o)
+    }
+
+    fn retry_outcomes(&mut self, now: Timestamp) {
+        for o in std::mem::take(&mut self.outcomes) {
+            if now < o.next_try {
+                self.outcomes.push(o);
+            } else if let Some(pending) = self.try_outcome(o, now) {
+                self.outcomes.push(pending);
+            }
+        }
+    }
+
+    /// Notify for a finished runner: a red job (failure, timeout) or a failed runner process counts as a
+    /// failure; `All` also reports the rest.
+    fn send_outcome(&self, o: &Outcome, job: Option<&JobInfo>) {
+        let conclusion = job.and_then(|j| j.conclusion);
+        let red = conclusion.is_some_and(JobConclusion::is_red);
         let send = match self.settings.notify {
             NotifyMode::Off => false,
-            NotifyMode::FailuresOnly => crashed,
+            NotifyMode::FailuresOnly => o.crashed || red,
             NotifyMode::All => true,
         };
         if !send {
             return;
         }
-        let what = match code {
+        let what = job.map(|j| match &j.workflow {
+            Some(w) => format!("{w} / {}", j.name),
+            None => j.name.clone(),
+        });
+        let runner = match o.code {
             Some(0) => "finished".to_string(),
             Some(c) => format!("exited with code {c}"),
             None => "was stopped".to_string(),
         };
+        let (title, body) = if red {
+            let words = conclusion.map_or("failed", JobConclusion::words);
+            (
+                "Job failed",
+                format!(
+                    "{}: {} {words}",
+                    o.repo,
+                    what.unwrap_or_else(|| "job".into())
+                ),
+            )
+        } else if o.crashed {
+            let tail = what.map(|w| format!(" ({w})")).unwrap_or_default();
+            (
+                "Runner failed",
+                format!("{}: runner {runner}{tail}", o.repo),
+            )
+        } else {
+            let words = conclusion.map_or("finished", JobConclusion::words);
+            (
+                "Job finished",
+                format!(
+                    "{}: {} {words}",
+                    o.repo,
+                    what.unwrap_or_else(|| "runner".into())
+                ),
+            )
+        };
         let n = Notification {
-            title: if crashed {
-                "Runner failed".into()
-            } else {
-                "Job finished".into()
-            },
-            body: format!("{}: runner {what}", t.repo),
+            title: title.into(),
+            body,
         };
         if let Err(e) = self.deps.notifier.notify(&n) {
             tracing::warn!(error = %e, "notification failed");
@@ -687,6 +831,7 @@ impl Engine {
     }
 
     fn apply_runner_states(&mut self, repo: &str, runners: &[RunnerInfo]) {
+        let github = self.deps.github.clone();
         for t in self
             .tracked
             .iter_mut()
@@ -694,6 +839,13 @@ impl Engine {
         {
             if runners.iter().any(|r| r.name == t.name && r.busy) {
                 t.claimed = true;
+            }
+            // A busy runner has a job: learn which (exact details, and its id for the outcome later).
+            if t.claimed && t.job.is_none() {
+                match github.find_job_by_runner(&t.repo, &t.name) {
+                    Ok(found) => t.job = found,
+                    Err(e) => tracing::info!(runner = %t.name, error = %e, "job not found yet"),
+                }
             }
         }
     }
@@ -799,6 +951,7 @@ impl Engine {
                     started: now,
                     claimed: false,
                     hint,
+                    job: None,
                 });
             }
             Err(e) => {

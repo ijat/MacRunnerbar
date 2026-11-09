@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use macrunnerbar_core::{
-    ApiError, GitHubApi, JitConfig, QueuedJob, Repo, RunnerInfo, RunnerRelease, Secret,
+    ApiError, GitHubApi, JitConfig, JobConclusion, JobInfo, JobStatus, QueuedJob, Repo, RunnerInfo,
+    RunnerRelease, Secret,
 };
 
 #[derive(Debug, Default)]
@@ -23,6 +24,8 @@ struct State {
     release: Option<RunnerRelease>,
     /// Failure for `latest_runner_release`.
     release_failure: Option<ApiError>,
+    /// Jobs with the name of the runner that took them.
+    jobs: Vec<(JobInfo, String)>,
     calls: Vec<String>,
 }
 
@@ -152,6 +155,22 @@ impl FakeGitHub {
         self.lock().release = Some(release);
     }
 
+    /// Register a job as taken by runner `runner_name` (in `job.repo`).
+    pub fn add_job(&self, job: JobInfo, runner_name: &str) {
+        let mut s = self.lock();
+        s.jobs.retain(|(j, _)| j.job_id != job.job_id);
+        s.jobs.push((job, runner_name.into()));
+    }
+
+    /// Change a registered job's status and conclusion.
+    pub fn set_job_state(&self, job_id: u64, status: JobStatus, conclusion: Option<JobConclusion>) {
+        let mut s = self.lock();
+        if let Some((j, _)) = s.jobs.iter_mut().find(|(j, _)| j.job_id == job_id) {
+            j.status = status;
+            j.conclusion = conclusion;
+        }
+    }
+
     /// Calls so far, as `"method repo"` strings, oldest first.
     pub fn calls(&self) -> Vec<String> {
         self.lock().calls.clone()
@@ -247,5 +266,26 @@ impl GitHubApi for FakeGitHub {
             return Err(ApiError::Invalid("checksum mismatch".into()));
         }
         std::fs::write(dest, FAKE_ARCHIVE_BYTES).map_err(|e| ApiError::Network(e.to_string()))
+    }
+
+    fn find_job_by_runner(
+        &self,
+        repo: &str,
+        runner_name: &str,
+    ) -> Result<Option<JobInfo>, ApiError> {
+        let s = self.repo_call("find_job_by_runner", repo)?;
+        Ok(s.jobs
+            .iter()
+            .find(|(j, r)| r == runner_name && j.repo.eq_ignore_ascii_case(repo))
+            .map(|(j, _)| j.clone()))
+    }
+
+    fn get_job(&self, repo: &str, job_id: u64) -> Result<JobInfo, ApiError> {
+        let s = self.repo_call("get_job", repo)?;
+        s.jobs
+            .iter()
+            .find(|(j, _)| j.job_id == job_id && j.repo.eq_ignore_ascii_case(repo))
+            .map(|(j, _)| j.clone())
+            .ok_or(ApiError::NotFound)
     }
 }
