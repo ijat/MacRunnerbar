@@ -24,7 +24,9 @@ against real GitHub (see [First run](#first-run-and-live-check)).
 
 ## Security
 
-- **Jobs run as you**, with your user's privileges, in a per-job directory that is deleted afterwards.
+- **Jobs run as you**, with your user's privileges, in a per-job directory (`~/.macrunnerbar/jobs/<name>`, a path
+  without spaces, which the actions runner needs for `run:` steps) that is deleted afterwards. A home directory
+  whose path contains a space is refused at start.
   Anything a workflow does, it does as your account. Only run workflows you trust.
 - **Public repos are skipped** unless you list them under "Public repos to serve": a pull request from a
   fork would run untrusted code on your Mac.
@@ -78,7 +80,7 @@ The first run against real GitHub is a manual check. Use a private repo you admi
    and start it (`gh workflow run mac-smoke.yml`, or the Actions tab).
 3. Within a poll interval (30 s by default) the icon becomes a filled square with a `1`, the popover lists
    the job with a link, and the job finishes green. Afterwards the job directory is gone
-   (`ls ~/Library/Application\ Support/MacRunnerbar/jobs`) and the repo's Settings, Actions, Runners shows
+   (`ls ~/.macrunnerbar/jobs`) and the repo's Settings, Actions, Runners shows
    no `ghm-*` runner. Logs are in `~/Library/Logs/MacRunnerbar/`.
 4. Put `exit 1` in the step: you get a "Job failed" notification.
 5. Start the job again and Quit from the popover while it runs: no `Runner.Listener` process remains
