@@ -48,7 +48,7 @@ against GitHub is a manual step by the user.
 ## Hard rules
 
 1. Never read, print, log, echo or commit the user's PAT (`GITHUB_MASTER_CLASSIC_PAT` in `~/.zshrc`) or any
-   token. In the app it lives only in the macOS Keychain, held as `Secret<T>` (prints `[redacted]`). Checks:
+   token. In the app it lives only in the macOS Keychain, held as `Secret<T>` (prints `[redacted]`). The Keychain does not hide it from jobs (they run as the user and can call `security`, D31); do not claim it does. Checks:
    `.claude/settings.json` denies, `scripts/check-secrets.sh`, sentinel tests (`macrunnerbar-macos` log and Keychain argv, `macrunnerbar-github` errors, the app's Preferences form).
 2. Per-job JIT, ephemeral runners only: nothing idle, a fresh template copy per job, deleted afterwards along
    with any stale registration. Quit or crash leaves no orphan process or registration; cleanup runs on next launch.
