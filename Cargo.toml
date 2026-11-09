@@ -28,8 +28,9 @@ serde = { version = "1", features = ["derive"] }
 # LuneUI, pinned by git rev (CLAUDE.md, D7). Only `apps/macrunnerbar` depends on it.
 lune-ui = { git = "https://github.com/lune-rs/luneui-rs", rev = "32d19048684745b54ab542e5dc886bea43326e08" }
 
+# Unwinding stays on (no `panic = "abort"`): the engine thread contains a panic and its shutdown still kills the
+# runners; an abort would leave untrusted workflow processes running with no supervisor.
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
