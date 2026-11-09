@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn slug_normalises_repo_names() {
-        assert_eq!(slug("Luneterm/My_Repo.rs"), "luneterm-my-repo-rs");
+        assert_eq!(slug("Example-Org/My_Repo.rs"), "example-org-my-repo-rs");
         assert_eq!(slug("//a//"), "a");
         assert_eq!(slug("日本/x"), "x");
         assert_eq!(slug("///"), "repo");

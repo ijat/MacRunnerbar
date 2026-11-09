@@ -1,11 +1,11 @@
 # State
 
-Last updated: 2026-11-09 (v1 step 6)
+Last updated: 2026-11-09 (v1 merged, fd4e6e0)
 
 ## Now
 
-v1 is implemented on branch `orch/v1` (workspace, GitHub and macOS adapters, engine, app, gate, CI) and waits
-for review and the merge. Last updated: step 6 (gate, boundaries, CI, README).
+v1 is merged on `main` (workspace, GitHub and macOS adapters, engine, app, gate, CI). Gate parts green
+(fmt, clippy, tests, boundaries, secrets). Not yet run against real GitHub. Publishing the repo is next.
 
 ## Next
 
@@ -14,8 +14,8 @@ for review and the merge. Last updated: step 6 (gate, boundaries, CI, README).
    assumptions: JIT runner labels versus `runs-on`, and `run.sh --jitconfig` (an environment-variable form exists,
    `ProcessRunnerHost::with_jit_via_env`).
 2. Run `cargo test -p macrunnerbar-macos -- --ignored` once by hand (real login Keychain, scratch item).
-3. Before publishing the repo (a separate, approved step): `~/.claude/github/README.md` (collaborators-only PRs,
-   push owner-only) and `scripts/check-secrets.sh`; check the font and crate licences listed in `THIRD_PARTY_NOTICES.md`.
+3. Publish (separate, approved step): the public-readiness clean-up is done; run `scripts/check-secrets.sh`,
+   restrict PRs to collaborators and push to the owner only on the new repo.
 
 ## Blockers / open questions
 
