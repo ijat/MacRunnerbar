@@ -1,7 +1,9 @@
 //! Every fake passes its own contract suite.
 
-use macrunnerbar_core::{JitConfig, QueuedJob, Repo, Secret, Timestamp};
-use macrunnerbar_testkit::contract::{self, GitHubFixture};
+use macrunnerbar_core::{
+    JitConfig, JobConclusion, JobInfo, JobStatus, QueuedJob, Repo, Secret, Timestamp,
+};
+use macrunnerbar_testkit::contract::{self, GitHubFixture, JobFixture};
 use macrunnerbar_testkit::{
     FakeClock, FakeGitHub, FakeKeychain, FakeLoginItem, FakeRunnerHost, MemSettingsStore,
     RecordingNotifier,
@@ -97,4 +99,31 @@ fn recording_notifier_passes_contract() {
 #[test]
 fn fake_login_item_passes_contract() {
     contract::login_item_contract(&FakeLoginItem::new());
+}
+
+#[test]
+fn fake_github_passes_job_contract() {
+    let (gh, _) = seeded_github();
+    gh.add_job(
+        JobInfo {
+            repo: "owner/repo".into(),
+            run_id: 5,
+            job_id: 77,
+            workflow: Some("CI".into()),
+            name: "build".into(),
+            html_url: "https://github.com/owner/repo/actions/runs/5/job/77".into(),
+            status: JobStatus::Completed,
+            conclusion: Some(JobConclusion::Failure),
+        },
+        "ghm-owner-repo-abc123",
+    );
+    contract::github_job_contract(
+        &gh,
+        &JobFixture {
+            repo: "owner/repo".into(),
+            runner_name: "ghm-owner-repo-abc123".into(),
+            job_id: 77,
+            conclusion: JobConclusion::Failure,
+        },
+    );
 }

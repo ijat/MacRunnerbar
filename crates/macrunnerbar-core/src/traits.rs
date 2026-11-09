@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::error::{ApiError, OsError};
 use crate::secret::Secret;
 use crate::types::{
-    JitConfig, Notification, ProcessState, QueuedJob, Repo, RunnerHandle, RunnerInfo,
+    JitConfig, JobInfo, Notification, ProcessState, QueuedJob, Repo, RunnerHandle, RunnerInfo,
     RunnerRelease, Settings, Timestamp,
 };
 
@@ -39,6 +39,17 @@ pub trait GitHubApi: Send + Sync {
     /// Download `release` to `dest`, verifying its SHA-256. On a mismatch, `dest` is not left behind
     /// and the error is `ApiError::Invalid`.
     fn download_release(&self, release: &RunnerRelease, dest: &Path) -> Result<(), ApiError>;
+
+    /// The job that the runner named `runner_name` is executing or recently executed in `repo`, found
+    /// among its in-progress and recently completed runs. `Ok(None)` if there is none (yet).
+    fn find_job_by_runner(
+        &self,
+        repo: &str,
+        runner_name: &str,
+    ) -> Result<Option<JobInfo>, ApiError>;
+
+    /// One job by id: its status and, once completed, its conclusion. `NotFound` if it does not exist.
+    fn get_job(&self, repo: &str, job_id: u64) -> Result<JobInfo, ApiError>;
 }
 
 /// Runner processes and their directories on this machine.

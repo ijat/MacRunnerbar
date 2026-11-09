@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use macrunnerbar_core::Secret;
 use macrunnerbar_github::GitHubClient;
-use macrunnerbar_testkit::contract::{self, GitHubFixture};
+use macrunnerbar_testkit::contract::{self, GitHubFixture, JobFixture};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::{Req, Resp, Stub};
@@ -50,10 +50,26 @@ fn github_world() -> Stub {
                         200,
                         &json!({"workflow_runs":[{"id":1,"name":"CI","html_url":"https://github.com/owner/repo/actions/runs/1"}]}),
                     )
+                } else if req.query().contains("status=completed") {
+                    Resp::json(
+                        200,
+                        &json!({"workflow_runs":[{"id":9,"name":"Release","html_url":"https://github.com/owner/repo/actions/runs/9"}]}),
+                    )
                 } else {
                     Resp::json(200, &json!({"workflow_runs":[]}))
                 }
             }
+            ("GET", ["repos", "owner", "repo", "actions", "runs", "9", "jobs"]) => Resp::json(
+                200,
+                &json!({"jobs":[
+                    {"id":76,"run_id":9,"name":"lint","status":"completed","conclusion":"success","runner_name":"gha-linux-1","workflow_name":"Release"},
+                    {"id":77,"run_id":9,"name":"build","status":"completed","conclusion":"failure","runner_name":"ghm-contract-job-aaaaaa","workflow_name":"Release","html_url":"https://github.com/owner/repo/actions/runs/9/job/77"}
+                ]}),
+            ),
+            ("GET", ["repos", "owner", "repo", "actions", "jobs", "77"]) => Resp::json(
+                200,
+                &json!({"id":77,"run_id":9,"name":"build","status":"completed","conclusion":"failure","runner_name":"ghm-contract-job-aaaaaa","workflow_name":"Release","html_url":"https://github.com/owner/repo/actions/runs/9/job/77"}),
+            ),
             ("GET", ["repos", "owner", "repo", "actions", "runs", "1", "jobs"]) => Resp::json(
                 200,
                 &json!({"jobs":[
@@ -156,4 +172,28 @@ fn client_passes_download_contract() {
     let release = macrunnerbar_core::GitHubApi::latest_runner_release(&c).expect("release");
     assert_eq!(release.version, "2.999.1");
     contract::github_download_contract(&c, &release);
+}
+
+#[test]
+fn client_passes_job_contract() {
+    let stub = github_world();
+    let c = client(&stub);
+    contract::github_job_contract(
+        &c,
+        &JobFixture {
+            repo: "owner/repo".into(),
+            runner_name: "ghm-contract-job-aaaaaa".into(),
+            job_id: 77,
+            conclusion: macrunnerbar_core::JobConclusion::Failure,
+        },
+    );
+    let found = macrunnerbar_core::GitHubApi::find_job_by_runner(
+        &c,
+        "owner/repo",
+        "ghm-contract-job-aaaaaa",
+    )
+    .expect("find")
+    .expect("some");
+    assert_eq!(found.workflow.as_deref(), Some("Release"));
+    assert_eq!(found.run_id, 9);
 }

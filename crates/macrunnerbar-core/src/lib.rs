@@ -14,7 +14,7 @@ pub use error::{ApiError, OsError};
 pub use secret::Secret;
 pub use traits::{Clock, GitHubApi, Keychain, LoginItem, Notifier, RunnerHost, SettingsStore};
 pub use types::{
-    IconState, JitConfig, Notification, NotifyMode, ProcessState, QueuedJob, Repo, RunnerHandle,
-    RunnerInfo, RunnerRelease, RunningJob, Settings, StatusSnapshot, Timestamp, WaitReason,
-    WaitingJobs, owner_of,
+    IconState, JitConfig, JobConclusion, JobInfo, JobStatus, Notification, NotifyMode,
+    ProcessState, QueuedJob, Repo, RunnerHandle, RunnerInfo, RunnerRelease, RunningJob, Settings,
+    StatusSnapshot, Timestamp, WaitReason, WaitingJobs, owner_of,
 };

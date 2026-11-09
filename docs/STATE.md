@@ -4,7 +4,7 @@ Last updated: 2026-11-09 (v1 step 4)
 
 ## Now
 
-v1 orchestration in progress on branch `orch/v1`. Done: workspace + core/testkit (step 1), GitHub adapter (2), macOS adapter (3), engine in `macrunnerbar-core::engine` (4). Pending: app with tray/popover/preferences/bundle (5), gate/boundaries/CI/docs (6).
+v1 orchestration in progress on branch `orch/v1`. Done: workspace + core/testkit (step 1), GitHub adapter (2), macOS adapter (3), engine in `macrunnerbar-core::engine` (4), job-conclusion notifications (step 5, Revision 1). Pending: app with tray/popover/preferences/bundle (5), gate/boundaries/CI/docs (6).
 
 ## Next
 
