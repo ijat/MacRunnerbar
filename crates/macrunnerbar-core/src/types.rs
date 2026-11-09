@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn owner_of_splits_on_first_slash() {
-        assert_eq!(owner_of("Luneterm/app"), "Luneterm");
+        assert_eq!(owner_of("Example-Org/app"), "Example-Org");
         assert_eq!(owner_of("solo"), "solo");
     }
 
