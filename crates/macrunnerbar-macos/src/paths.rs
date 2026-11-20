@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn jobs_dir_has_no_whitespace_for_a_normal_home() {
-        let p = Paths::for_home(Path::new("~"));
+        let p = Paths::for_home(Path::new("/Users/someone"));
         assert!(!p.jobs_dir().to_string_lossy().contains(char::is_whitespace));
         assert!(p.check_jobs_dir().is_ok());
     }
